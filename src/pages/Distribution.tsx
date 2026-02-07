@@ -355,7 +355,7 @@ id, created_at, quantity, unit_price, item_id, to_location_id,
             const { error: moveError } = await supabase
                 .from('inventory_moves')
                 .update({
-                    type: 'sale',
+                    type: 'sale' as any,
                     payment_status: 'paid',
                     payment_date: new Date().toISOString()
                 })
@@ -394,6 +394,7 @@ id, created_at, quantity, unit_price, item_id, to_location_id,
             loadStats()
         } catch (err: any) {
             console.error('Ошибка при оплате:', err)
+            alert('Ошибка при проведении оплаты: ' + (err.message || 'Неизвестная ошибка'))
         } finally {
             setLoading(false)
         }

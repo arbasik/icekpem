@@ -246,18 +246,26 @@ export default function Warehouse() {
         })
     }
 
-    async function handleMarkAsPaid(moveId: number) {
+    async function handleMarkAsPaid(moveId: number | string) {
         if (!confirm('Подтвердить получение оплаты?')) return
         try {
-            await supabase.from('inventory_moves').update({
-                type: 'sale',
+            console.log('Marking as paid:', moveId)
+            const { error } = await supabase.from('inventory_moves').update({
+                type: 'sale' as any, // Cast to any or specific enum if needed to avoid strict typing issues during quick fix
+                payment_status: 'paid', // Explicitly set payment_status to paid if the column exists
                 payment_date: new Date().toISOString()
             }).eq('id', moveId)
 
+            if (error) {
+                console.error('Supabase error:', error)
+                throw error
+            }
+
             // Reload
-            loadAllHistory()
-        } catch (err) {
-            alert('Ошибка')
+            await loadAllHistory()
+        } catch (err: any) {
+            console.error('Error in handleMarkAsPaid:', err)
+            alert('Ошибка при обновлении статуса: ' + (err.message || JSON.stringify(err)))
         }
     }
 
