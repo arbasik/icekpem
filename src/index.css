@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-primary: 34 211 238;
+  /* #22d3ee */
+  --color-void: 5 5 5;
+  /* #050505 */
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: #050505;
+  color: white;
+  overflow: hidden;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Оптимизация для 60 FPS - Убрано, так как ломает инпуты на Windows */
+.glass-panel {
+  /* will-change: transform; */
+  /* transform: translateZ(0); */
+  /* backface-visibility: hidden; */
+  -webkit-font-smoothing: subpixel-antialiased;
+}
+
+/* Плавные переходы */
+.transition-smooth {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Оптимизация hover эффектов - Убрано */
+/* button,
+a,
+[role="button"] {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+} */
+
+/* Скроллбары */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Убрать стрелочки у number inputs */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Fix Autocomplete/Autofill Background */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 30px #1a1a1a inset !important;
+  -webkit-text-fill-color: white !important;
+  caret-color: white !important;
+  border-radius: 8px !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Global Focus Override to prevent orange outline */
+*:focus-visible {
+  outline: none !important;
+  border-color: rgba(34, 211, 238, 0.5) !important;
+  /* primary color */
+  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.5) !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus {
+  outline: none !important;
+}
