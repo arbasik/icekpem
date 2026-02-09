@@ -207,23 +207,17 @@ export default function Layout() {
                                         to={item.path || '#'}
                                         className={({ isActive }) =>
                                             clsx(
-                                                'relative flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group overflow-hidden',
+                                                'flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group',
                                                 isActive
-                                                    ? 'bg-primary/10 text-primary shadow-[0_0_20px_-5px_rgb(var(--color-primary)/0.3)] font-semibold'
+                                                    ? 'bg-primary/10 text-primary font-semibold'
                                                     : 'text-secondary hover:text-white hover:bg-white/5'
                                             )
                                         }
                                     >
                                         {({ isActive }) => (
                                             <>
-                                                {isActive && (
-                                                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary shadow-[0_0_10px_2px_rgb(var(--color-primary)/0.5)]" />
-                                                )}
-                                                <item.icon className={clsx("w-5 h-5 transition-transform duration-300", isActive && "scale-110 drop-shadow-[0_0_5px_rgb(var(--color-primary)/0.5)]")} />
-                                                <span className="relative z-10">{item.name}</span>
-                                                {isActive && (
-                                                    <div className="absolute inset-0 bg-gradient-to-r from-primary/10 via-transparent to-transparent opacity-50" />
-                                                )}
+                                                <item.icon className={clsx("w-5 h-5 transition-colors", isActive && "text-primary")} />
+                                                <span>{item.name}</span>
                                             </>
                                         )}
                                     </NavLink>

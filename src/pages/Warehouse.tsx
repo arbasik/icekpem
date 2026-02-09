@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Warehouse as WarehouseIcon, Plus, X, Pencil, Trash2, LayoutGrid, List, History as HistoryIcon, ArrowDownLeft, ArrowUpRight, ArrowRightLeft, Package, RefreshCw } from 'lucide-react'
+import { Warehouse as WarehouseIcon, Plus, X, Pencil, Trash2, LayoutGrid, List, History as HistoryIcon, ArrowDownLeft, ArrowUpRight, ArrowRightLeft, Package, RefreshCw, Search } from 'lucide-react'
 import GlassCard from '../components/GlassCard'
 import IconPicker, { iconMap } from '../components/IconPicker'
 import CustomSelect from '../components/CustomSelect'
 import { supabase, Item, InventoryMove } from '../lib/supabase'
 import clsx from 'clsx'
 import Skeleton from '../components/Skeleton'
+import ItemHistoryModal from '../components/ItemHistoryModal'
 
 type TabType = 'raw_material' | 'finished_good' | 'history'
 type ViewMode = 'list' | 'grid'
@@ -15,13 +16,14 @@ interface InventoryItem {
     name: string
     type: 'raw_material' | 'finished_good'
     unit_cost: number
-    total_value?: number // New field
-    initial_cost: number // Для весовых - цена за упаковку, для штучных - за шт
+    total_value?: number
+    initial_cost: number
     total_quantity: number
     is_weighted?: boolean
-    sale_price?: number // Цена продажи
+    sale_price?: number
     icon?: string
     weight_per_pack?: number
+
 }
 
 // History Interfaces
@@ -43,13 +45,6 @@ const moveTypeLabels = {
 }
 
 
-
-const moveTypeIcons = {
-    purchase: ArrowDownLeft,
-    sale: ArrowUpRight,
-    transfer: ArrowRightLeft,
-    production: Package
-}
 
 export default function Warehouse() {
     const [activeTab, setActiveTab] = useState<TabType>('raw_material')
@@ -74,8 +69,11 @@ export default function Warehouse() {
 
     // Cost Edit State
     const [showCostModal, setShowCostModal] = useState(false)
-    const [costItem, setCostItem] = useState<InventoryItem | null>(null)
+    const [costItem, setCostItem] = useState<Item | null>(null)
     const [newCost, setNewCost] = useState('')
+
+    // History Modal State
+    const [historyItem, setHistoryItem] = useState<{ id: number | string, name: string, is_weighted?: boolean } | null>(null)
 
     // Create Item State
     const [showCreateItemModal, setShowCreateItemModal] = useState(false)
@@ -101,6 +99,13 @@ export default function Warehouse() {
     const [confirmMessage, setConfirmMessage] = useState('')
     const [confirmAction, setConfirmAction] = useState<() => Promise<void> | void>(() => { })
     const [confirmLoading, setConfirmLoading] = useState(false)
+
+    const [searchQuery, setSearchQuery] = useState('')
+
+    // Helper: Get stock status
+
+
+
 
     // Авто-заполнение веса при выборе товара
     useEffect(() => {
@@ -144,9 +149,9 @@ export default function Warehouse() {
                 .from('inventory_moves')
                 .select(`
                     *,
-                    items!inventory_moves_item_id_fkey(name, is_weighted),
-                    from_location:locations!inventory_moves_from_location_id_fkey(name, type),
-                    to_location:locations!inventory_moves_to_location_id_fkey(name)
+                    items(name, is_weighted),
+                    from_location:locations!from_location_id(name, type),
+                    to_location:locations!to_location_id(name)
                 `)
                 .order('created_at', { ascending: false })
                 .limit(200) // Increase limit to ensure we catch groups
@@ -190,23 +195,30 @@ export default function Warehouse() {
         const result: GroupedMove[] = []
         const processedIds = new Set<number>()
 
-        // First pass: Identify all Production Outputs (Positive Quantity)
-        const outputs = moves.filter(m => m.type === 'production' && m.quantity > 0)
+        // First pass: Identify all Production Outputs (has to_location_id, meaning product was added to stock)
+        const outputs = moves.filter(m =>
+            m.type === 'production' &&
+            m.to_location_id &&
+            !m.from_location_id
+        )
 
         // Helper to find inputs for an output
         const findInputs = (output: MoveWithDetails) => {
             if (output.batch_id) {
+                // Inputs have from_location_id set (ingredients taken from stock)
                 return moves.filter(m =>
                     m.type === 'production' &&
-                    m.quantity < 0 &&
+                    m.from_location_id &&
+                    !m.to_location_id &&
                     m.batch_id === output.batch_id
                 )
             }
-            // Fallback: Time proximity (60s)
+            // Fallback: Time proximity (60s) for old records without batch_id
             const time = new Date(output.created_at || 0).getTime()
             return moves.filter(m =>
                 m.type === 'production' &&
-                m.quantity < 0 &&
+                m.from_location_id &&
+                !m.to_location_id &&
                 !m.batch_id && // Only claim unbatched inputs
                 Math.abs(new Date(m.created_at || 0).getTime() - time) < 60000
             )
@@ -294,17 +306,29 @@ export default function Warehouse() {
             return
         }
 
+        // First get all warehouse location IDs (exclude client locations)
+        // Fetch fresh from DB to avoid timing issues with state
+        const { data: allLocations } = await supabase.from('locations').select('id, type')
+        const warehouseLocationIds = (allLocations || [])
+            .filter(loc => loc.type === 'warehouse' || loc.type === 'transit')
+            .map(loc => loc.id)
+
         const promises = (data || []).map(async (item) => {
             try {
+                // Fetch inventory for ALL locations, then filter in JS
                 const { data: inventoryData, error: invError } = await supabase
                     .from('inventory')
-                    .select('quantity, locations!inner(type)')
+                    .select('quantity, location_id')
                     .eq('item_id', item.id)
-                    .neq('locations.type', 'client')
 
                 if (invError) throw invError
 
-                const total_quantity = inventoryData?.reduce((sum, inv) => sum + inv.quantity, 0) || 0
+                // Only count inventory at warehouse/transit locations, NOT at clients
+                const warehouseInventory = inventoryData?.filter(inv =>
+                    warehouseLocationIds.includes(inv.location_id)
+                ) || []
+
+                const total_quantity = warehouseInventory.reduce((sum, inv) => sum + inv.quantity, 0)
                 let avgPrice = item.unit_cost
 
                 return {
@@ -599,7 +623,6 @@ export default function Warehouse() {
                     type: 'sale', // ВНИМАНИЕ: Используем type='sale' для списания, так как 'write_off' не поддерживается? 
                     // Лучше использовать 'write_off' если есть поддержка, но в handle_inventory_move v3 я добавил write_off.
                     // Проверим, есть ли write_off в constraint. Если нет, пока sale.
-                    // Триггер v3 поддерживает 'write_off', но БД может иметь constraint.
                     // Оставим sale пока что, или лучше change to write_off if constraint allows.
                     // Вернемся к sale чтобы не ломать, но добавим комментарий.
                     unit_price: 0
@@ -728,184 +751,187 @@ export default function Warehouse() {
                         </div>
 
                         <div className="overflow-x-auto">
-                            <table className="w-full border-separate border-spacing-y-2">
-                                <thead>
-                                    <tr className="text-xs uppercase text-secondary">
-                                        <th className="text-left py-3 px-4">Операция</th>
-                                        <th className="text-left py-3 px-4">Товар</th>
-                                        <th className="text-left py-3 px-4">Движение</th>
-                                        <th className="text-right py-3 px-4">Кол-во</th>
-                                        <th className="text-right py-3 px-4">Сумма</th>
-                                        <th className="text-right py-3 px-4">Дата</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="text-sm">
-                                    {historyLoading ? (
-                                        Array.from({ length: 5 }).map((_, i) => (
-                                            <tr key={i} className="bg-white/5 border-l-2 border-l-transparent">
-                                                <td className="py-4 px-4"><Skeleton className="h-4 w-24" /></td>
-                                                <td className="py-4 px-4"><Skeleton className="h-4 w-32" /></td>
-                                                <td className="py-4 px-4"><Skeleton className="h-4 w-24" /></td>
-                                                <td className="py-4 px-4"><div className="flex justify-end"><Skeleton className="h-4 w-12" /></div></td>
-                                                <td className="py-4 px-4"><div className="flex justify-end"><Skeleton className="h-4 w-16" /></div></td>
-                                                <td className="py-4 px-4"><div className="flex justify-end"><Skeleton className="h-4 w-24" /></div></td>
-                                            </tr>
-                                        ))
-                                    ) : filteredGroupedMoves.length === 0 ? (
-                                        <tr><td colSpan={6} className="py-12 text-center text-secondary">История пуста</td></tr>
-                                    ) : (
-                                        filteredGroupedMoves.map((group, idx) => {
-                                            const move = group.type === 'simple' ? group.move : group.output
-                                            const inputs = group.type === 'production_group' ? group.inputs : []
+                            {/* Card-based History */}
+                            <div className="space-y-3">
+                                {historyLoading ? (
+                                    Array.from({ length: 4 }).map((_, i) => (
+                                        <div key={i} className="bg-white/5 rounded-xl p-4 border border-white/10">
+                                            <div className="flex justify-between mb-3">
+                                                <Skeleton className="h-5 w-32" />
+                                                <Skeleton className="h-4 w-24" />
+                                            </div>
+                                            <Skeleton className="h-4 w-48 mb-2" />
+                                            <Skeleton className="h-4 w-32" />
+                                        </div>
+                                    ))
+                                ) : filteredGroupedMoves.length === 0 ? (
+                                    <div className="py-12 text-center text-secondary">История пуста</div>
+                                ) : (
+                                    filteredGroupedMoves.map((group, idx) => {
+                                        const move = group.type === 'simple' ? group.move : group.output
+                                        const inputs = group.type === 'production_group' ? group.inputs : []
 
-                                            const Icon = moveTypeIcons[move.type] || Package
-                                            const totalCost = (move.unit_price || 0) * move.quantity
+                                        // Calculate total cost for production (sum of inputs)
+                                        const productionCost = inputs.reduce((sum, inp) =>
+                                            sum + Math.abs(inp.quantity) * (inp.unit_price || 0), 0)
 
-                                            // Logic
-                                            let sourceName = move.from_location_name
-                                            let destName = move.to_location_name
+                                        const totalCost = move.type === 'production'
+                                            ? productionCost
+                                            : (move.unit_price || 0) * move.quantity
 
-                                            let displayType = moveTypeLabels[move.type]
-                                            let statusText = ''
-                                            let statusColor = ''
-                                            let typeColor = 'text-secondary'
-                                            let isRealization = false
+                                        // Card style based on type
+                                        const typeConfig: Record<string, { border: string, text: string, bg: string, label: string }> = {
+                                            purchase: { border: 'border-l-emerald-500', text: 'text-emerald-400', bg: 'bg-emerald-500/20', label: 'Закупка' },
+                                            production: { border: 'border-l-purple-500', text: 'text-purple-400', bg: 'bg-purple-500/20', label: 'Производство' },
+                                            sale: { border: 'border-l-red-500', text: 'text-red-400', bg: 'bg-red-500/20', label: 'Продажа' },
+                                            transfer: { border: 'border-l-blue-500', text: 'text-blue-400', bg: 'bg-blue-500/20', label: 'Реализация' }
+                                        }
+                                        const config = typeConfig[move.type] || typeConfig.purchase
 
-                                            if (move.type === 'purchase') {
-                                                sourceName = sourceName || 'Поставщик'
-                                                destName = destName || 'Склад'
-                                                typeColor = 'text-emerald-400'
-                                            } else if (move.type === 'production') {
-                                                sourceName = 'Цех'
-                                                destName = destName || 'Склад'
-                                                typeColor = 'text-purple-400'
-                                                // No count in label anymore
-                                            } else if (move.type === 'sale') {
-                                                sourceName = sourceName || 'Склад'
-                                                destName = destName || 'Клиент'
-                                                displayType = 'Продажа'
-                                                statusText = 'Оплачено'
-                                                statusColor = 'text-emerald-400'
-                                                typeColor = 'text-red-400'
-                                            } else if (move.type === 'transfer') {
-                                                destName = destName || 'Точка'
-                                                displayType = 'Реализация'
-                                                // Only show status if Paid. If consignment, hide text to avoid redundancy.
-                                                if (move.payment_status === 'paid') {
-                                                    statusText = 'Оплачено'
-                                                    statusColor = 'text-emerald-400'
-                                                } else {
-                                                    // Default is implied "On Realization", keep empty
-                                                    statusText = ''
-                                                }
-
-                                                statusColor = 'text-yellow-400'
-                                                typeColor = 'text-blue-400'
-                                                isRealization = true
-                                            }
-
-                                            return (
-                                                <tr key={move.id || idx} className={clsx("bg-white/5 transition-all hover:bg-white/10 border-l-2",
-                                                    move.type === 'purchase' ? 'border-l-emerald-500' :
-                                                        move.type === 'sale' ? 'border-l-red-500' :
-                                                            move.type === 'production' ? 'border-l-purple-500' :
-                                                                'border-l-blue-500'
-                                                )}>
-                                                    <td className="py-4 px-4 rounded-r-lg">
-                                                        <div className="flex flex-col">
-                                                            <div className={clsx("flex items-center gap-2 font-medium text-sm", typeColor)}>
-                                                                <Icon className="w-4 h-4" />
-                                                                <span>{displayType}</span>
-                                                            </div>
-                                                            {statusText && (
-                                                                <span className={clsx("text-xs mt-0.5 font-medium ml-6", statusColor)}>
-                                                                    {statusText}
-                                                                </span>
-                                                            )}
-                                                            {/* Payment Date Info for Sale */}
-                                                            {move.type === 'sale' && move.payment_date && (
-                                                                <span className="text-[10px] text-white/50 ml-6 mt-0.5">
-                                                                    Опл: {new Date(move.payment_date).toLocaleDateString()}
-                                                                </span>
-                                                            )}
+                                        return (
+                                            <div
+                                                key={move.id || idx}
+                                                className={clsx(
+                                                    "bg-white/5 rounded-xl p-4 border-l-4 border border-white/10 transition-all hover:bg-white/8",
+                                                    config.border
+                                                )}
+                                            >
+                                                {/* Header: Type Label + Date */}
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className={clsx("w-8 h-8 rounded-lg flex items-center justify-center", config.bg)}>
+                                                            {move.type === 'purchase' && <ArrowDownLeft className={clsx("w-4 h-4", config.text)} />}
+                                                            {move.type === 'production' && <Package className={clsx("w-4 h-4", config.text)} />}
+                                                            {move.type === 'sale' && <ArrowUpRight className={clsx("w-4 h-4", config.text)} />}
+                                                            {move.type === 'transfer' && <ArrowRightLeft className={clsx("w-4 h-4", config.text)} />}
                                                         </div>
-                                                    </td>
-                                                    <td className="py-4 px-4 font-medium text-white">
-                                                        <div>{move.item_name}</div>
-                                                        {move.is_weighted && <div className="text-xs text-secondary">(Весовой)</div>}
+                                                        <span className={clsx("font-semibold", config.text)}>{config.label}</span>
 
-                                                        {/* INLINE Ingredients Display - IMPROVED */}
-                                                        {group.type === 'production_group' && inputs.length > 0 && (
-                                                            <div className="mt-2 text-xs bg-black/20 p-2 rounded-lg border border-white/5">
-                                                                <div className="text-secondary mb-1 flex items-center gap-1">
-                                                                    <ArrowRightLeft className="w-3 h-3 rotate-90" />
-                                                                    <span>Использовано сырья:</span>
-                                                                </div>
-                                                                <div className="flex flex-wrap gap-2">
-                                                                    {inputs.map((i) => (
-                                                                        <span key={i.id} className="inline-flex items-center px-1.5 py-0.5 rounded text-white/70 bg-white/5 border border-white/5">
-                                                                            {i.item_name}
-                                                                            <span className="ml-1 opacity-50 text-[10px]">
-                                                                                -{formatQuantity(Math.abs(i.quantity), i.is_weighted)}
-                                                                            </span>
-                                                                        </span>
-                                                                    ))}
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                    <td className="py-4 px-4 text-secondary">
-                                                        <div className="flex items-center gap-2 text-xs">
-                                                            <span className="text-white/70">{sourceName || '—'}</span>
-                                                            <ArrowRightLeft className="w-3 h-3 text-secondary/50" />
-                                                            <span className="text-white/70">{destName || '—'}</span>
-                                                        </div>
-                                                    </td>
-                                                    <td className="py-4 px-4 text-right">
-                                                        <div className="font-bold text-white text-base">
-                                                            {formatQuantity(move.quantity, move.is_weighted)}
-                                                        </div>
-                                                    </td>
-                                                    <td className="py-4 px-4 text-right">
-                                                        {/* Actions for Realization */}
-                                                        {isRealization ? (
-                                                            <button
-                                                                onClick={() => move.id && handleMarkAsPaid(move.id)}
-                                                                className="px-2 py-1 bg-emerald-500/20 text-emerald-400 text-xs rounded hover:bg-emerald-500/30 transition-colors"
-                                                            >
-                                                                Оплачено
-                                                            </button>
-                                                        ) : (
-                                                            <span className="font-mono text-primary">
-                                                                {move.unit_price ? `${totalCost.toFixed(2)} ₽` : '—'}
+                                                        {/* Status badge for transfer */}
+                                                        {move.type === 'transfer' && (
+                                                            <span className={clsx(
+                                                                "px-2 py-0.5 rounded-full text-xs font-medium",
+                                                                move.payment_status === 'paid'
+                                                                    ? "bg-emerald-500/20 text-emerald-400"
+                                                                    : "bg-yellow-500/20 text-yellow-400"
+                                                            )}>
+                                                                {move.payment_status === 'paid' ? '✓ Оплачено' : '⏳ Ожидает'}
                                                             </span>
                                                         )}
-                                                    </td>
-                                                    <td className="py-4 px-4 text-right text-secondary text-xs rounded-r-lg">
-                                                        {new Date(move.created_at || Date.now()).toLocaleDateString()}
-                                                        <div className="text-[10px] opacity-70">
-                                                            {new Date(move.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                    </div>
+                                                    <span className="text-sm text-secondary">
+                                                        {new Date(move.created_at || Date.now()).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                                    </span>
+                                                </div>
+
+                                                {/* PRODUCTION: Input → Output flow */}
+                                                {move.type === 'production' && (
+                                                    <div className="flex items-center gap-3">
+                                                        {/* Inputs (ingredients) */}
+                                                        {inputs.length > 0 && (
+                                                            <div className="flex-1 bg-red-500/10 rounded-lg p-3 border border-red-500/20">
+                                                                <div className="text-xs text-red-400 mb-1">Использовано:</div>
+                                                                {inputs.map((inp) => (
+                                                                    <div key={inp.id} className="text-white text-sm">
+                                                                        {inp.item_name} <span className="text-red-300">−{formatQuantity(Math.abs(inp.quantity), inp.is_weighted)}</span>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+
+                                                        {/* Arrow */}
+                                                        <div className="text-purple-400 text-xl">→</div>
+
+                                                        {/* Output */}
+                                                        <div className="flex-1 bg-purple-500/10 rounded-lg p-3 border border-purple-500/20">
+                                                            <div className="text-xs text-purple-400 mb-1">Получено:</div>
+                                                            <div className="text-white text-sm font-medium">
+                                                                {move.item_name} <span className="text-purple-300">+{formatQuantity(move.quantity, move.is_weighted)}</span>
+                                                            </div>
+                                                            {productionCost > 0 && (
+                                                                <div className="text-xs text-secondary mt-1">
+                                                                    Себестоимость: {productionCost.toFixed(0)} ₽
+                                                                </div>
+                                                            )}
                                                         </div>
-                                                    </td>
-                                                </tr>
-                                            )
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
+                                                    </div>
+                                                )}
+
+                                                {/* PURCHASE */}
+                                                {move.type === 'purchase' && (
+                                                    <div className="flex items-center justify-between">
+                                                        <div>
+                                                            <div className="text-white font-medium">{move.item_name}</div>
+                                                            <div className="text-sm text-emerald-300">+{formatQuantity(move.quantity, move.is_weighted)}</div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            <div className="text-lg font-bold text-emerald-400">{totalCost.toFixed(0)} ₽</div>
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {/* SALE / TRANSFER */}
+                                                {(move.type === 'sale' || move.type === 'transfer') && (
+                                                    <div className="flex items-center justify-between">
+                                                        <div>
+                                                            <div className="text-white font-medium">{move.item_name}</div>
+                                                            <div className={clsx("text-sm", config.text)}>−{formatQuantity(move.quantity, move.is_weighted)}</div>
+                                                            <div className="text-xs text-secondary mt-1">→ {move.to_location_name || 'Клиент'}</div>
+                                                        </div>
+                                                        <div className="text-right">
+                                                            {totalCost > 0 && (
+                                                                <div className={clsx("text-lg font-bold", config.text)}>{totalCost.toFixed(0)} ₽</div>
+                                                            )}
+                                                            {move.type === 'transfer' && move.payment_status !== 'paid' && (
+                                                                <button
+                                                                    onClick={() => move.id && handleMarkAsPaid(move.id)}
+                                                                    className="mt-1 px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs rounded-lg hover:bg-emerald-500/30 transition-colors"
+                                                                >
+                                                                    Оплачено
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )
+                                    })
+                                )}
+                            </div>
                         </div>
                     </GlassCard>
                 ) : (
                     <GlassCard>
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-xl font-semibold">В наличии</h2>
-                            <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
-                                <button onClick={() => setViewMode('list')} className={clsx('p-2 rounded-md transition-all', viewMode === 'list' ? 'bg-primary/20 text-primary' : 'text-secondary hover:text-white')}>
-                                    <List className="w-5 h-5" />
-                                </button>
-                                <button onClick={() => setViewMode('grid')} className={clsx('p-2 rounded-md transition-all', viewMode === 'grid' ? 'bg-primary/20 text-primary' : 'text-secondary hover:text-white')}>
-                                    <LayoutGrid className="w-5 h-5" />
-                                </button>
+                        {/* New Header with Search and Filters */}
+                        <div className="space-y-4 mb-6">
+                            {/* Title row */}
+                            <div className="flex items-center justify-between">
+                                <h2 className="text-xl font-semibold">В наличии</h2>
+                                <div className="flex bg-white/5 p-1 rounded-lg border border-white/10">
+                                    <button onClick={() => setViewMode('list')} className={clsx('p-2 rounded-md transition-all', viewMode === 'list' ? 'bg-primary/20 text-primary' : 'text-secondary hover:text-white')}>
+                                        <List className="w-5 h-5" />
+                                    </button>
+                                    <button onClick={() => setViewMode('grid')} className={clsx('p-2 rounded-md transition-all', viewMode === 'grid' ? 'bg-primary/20 text-primary' : 'text-secondary hover:text-white')}>
+                                        <LayoutGrid className="w-5 h-5" />
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Search and Filters */}
+                            <div className="flex flex-wrap gap-3 items-center">
+                                {/* Search */}
+                                <div className="relative flex-1 min-w-[200px]">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-secondary" />
+                                    <input
+                                        type="text"
+                                        placeholder="Поиск товаров..."
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-secondary/50 focus:outline-none focus:border-primary/50"
+                                    />
+                                </div>
+
+
                             </div>
                         </div>
 
@@ -934,96 +960,132 @@ export default function Warehouse() {
                                                     <td className="py-3 px-4"><div className="flex justify-end"><Skeleton className="h-8 w-16" /></div></td>
                                                 </tr>
                                             ))
-                                        ) : inventory.filter(i => {
-                                            return i.total_quantity > 0
-                                        }).map((item) => (
-                                            <tr key={item.id} className="border-b border-white/5 hover:bg-white/5 transition-smooth">
-                                                <td className="py-3 px-4 font-medium flex items-center gap-3">
-                                                    <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-primary">
-                                                        {(() => {
-                                                            const Icon = iconMap[item.icon || 'package'] || iconMap['package']
-                                                            return <Icon className="w-4 h-4" />
-                                                        })()}
-                                                    </div>
-                                                    {item.name}
-                                                </td>
-                                                <td className="py-3 px-4 text-right font-bold text-white">
-                                                    {item.is_weighted ? `${(item.total_quantity / 1000).toFixed(3)} кг` : `${item.total_quantity} шт`}
-                                                </td>
-                                                <td className="py-3 px-4 text-right">
-                                                    {item.is_weighted ? `${(item.unit_cost * 1000).toFixed(2)} ₽/кг` : `${item.unit_cost.toFixed(2)} ₽/шт`}
-                                                </td>
-                                                <td className="py-3 px-4 text-right font-medium text-primary">
-                                                    {(item.total_value || 0).toFixed(2)} ₽
-                                                </td>
-                                                {activeTab === 'finished_good' && (
-                                                    <td
-                                                        className="py-3 px-4 text-right text-green-400 cursor-pointer hover:bg-white/10 transition-colors"
-                                                        title="Изменить цену продажи"
-                                                        onClick={() => {
-                                                            setCostItem(item)
-                                                            setNewCost(item.sale_price?.toString() || '')
-                                                            setShowCostModal(true)
-                                                        }}
+                                        ) : (() => {
+                                            // 1. Filter items
+                                            const filteredItems = inventory.filter(item => {
+                                                if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
+                                                return item.total_quantity > 0
+                                            })
+
+                                            if (filteredItems.length === 0) {
+                                                return <tr><td colSpan={6} className="text-center py-8 text-secondary">Нет товаров</td></tr>
+                                            }
+
+                                            return filteredItems.map(item => {
+
+                                                return (
+                                                    <tr
+                                                        key={item.id}
+                                                        className="border-b border-white/5 hover:bg-white/5 transition-smooth group cursor-pointer"
+                                                        onClick={() => setHistoryItem(item)}
                                                     >
-                                                        {(item.total_quantity * (item.sale_price || 0)).toFixed(2)} ₽
-                                                        <Pencil className="w-3 h-3 text-secondary inline ml-2 opacity-50" />
-                                                    </td>
-                                                )}
-                                                <td className="py-3 px-4 text-right flex justify-end gap-2">
-                                                    <button onClick={() => handleEditStart(item)} className="p-2 hover:bg-white/10 rounded-lg text-secondary"><Pencil className="w-4 h-4" /></button>
-                                                    <button onClick={() => handleDeleteItem(item.id)} className="p-2 hover:bg-red-500/10 rounded-lg text-red-400"><Trash2 className="w-4 h-4" /></button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                        {inventory.filter(i => i.total_quantity > 0).length === 0 && (
-                                            <tr><td colSpan={6} className="text-center py-8 text-secondary">Нет товаров в наличии</td></tr>
-                                        )}
+                                                        <td className="py-3 px-4 font-medium flex items-center gap-3">
+
+                                                            <div className="w-8 h-8 rounded-lg bg-white/5 flex items-center justify-center text-primary flex-shrink-0">
+                                                                {(() => {
+                                                                    const Icon = iconMap[item.icon || 'package'] || iconMap['package']
+                                                                    return <Icon className="w-4 h-4" />
+                                                                })()}
+                                                            </div>
+                                                            <div className="truncate">
+                                                                <div>{item.name}</div>
+                                                            </div>
+                                                        </td>
+                                                        <td className="py-3 px-4 text-right font-bold text-white">
+                                                            {item.is_weighted ? `${(item.total_quantity / 1000).toFixed(3)} кг` : `${item.total_quantity} шт`}
+                                                        </td>
+                                                        <td className="py-3 px-4 text-right">
+                                                            {item.is_weighted ? `${(item.unit_cost * 1000).toFixed(2)} ₽/кг` : `${item.unit_cost.toFixed(2)} ₽/шт`}
+                                                        </td>
+                                                        <td className="py-3 px-4 text-right font-medium text-primary">
+                                                            {(item.total_value || 0).toFixed(2)} ₽
+                                                        </td>
+                                                        {activeTab === 'finished_good' && (
+                                                            <td
+                                                                className="py-3 px-4 text-right text-green-400 cursor-pointer hover:bg-white/10 transition-colors"
+                                                                title="Изменить цену продажи"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation()
+                                                                    setCostItem(item)
+                                                                    setNewCost(item.sale_price?.toString() || '')
+                                                                    setShowCostModal(true)
+                                                                }}
+                                                            >
+                                                                {(item.total_quantity * (item.sale_price || 0)).toFixed(2)} ₽
+                                                                <Pencil className="w-3 h-3 text-secondary inline ml-2 opacity-50" />
+                                                            </td>
+                                                        )}
+                                                        <td className="py-3 px-4 text-right flex justify-end gap-2">
+                                                            <button onClick={(e) => { e.stopPropagation(); handleEditStart(item) }} className="p-2 hover:bg-white/10 rounded-lg text-secondary"><Pencil className="w-4 h-4" /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id) }} className="p-2 hover:bg-red-500/10 rounded-lg text-red-400"><Trash2 className="w-4 h-4" /></button>
+                                                        </td>
+                                                    </tr>
+                                                )
+                                            })
+                                        })()}
+
                                     </tbody>
                                 </table>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="flex flex-col gap-6">
                                 {inventoryLoading ? (
-                                    Array.from({ length: 8 }).map((_, i) => (
-                                        <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-4">
-                                            <div className="flex justify-between mb-2">
-                                                <Skeleton variant="circular" className="w-10 h-10" />
-                                                <Skeleton className="w-8 h-8 rounded-lg" />
-                                            </div>
-                                            <Skeleton className="h-4 w-3/4 mb-2" />
-                                            <Skeleton className="h-8 w-1/2 mb-2" />
-                                            <div className="border-t border-white/10 pt-2 flex justify-between">
-                                                <Skeleton className="h-3 w-16" />
-                                                <Skeleton className="h-3 w-16" />
-                                            </div>
-                                        </div>
-                                    ))
-                                ) : (
-                                    inventory.filter(i => i.total_quantity > 0).map(item => (
-                                        <div key={item.id} className="bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 transition-all">
-                                            <div className="flex justify-between mb-2">
-                                                <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center text-primary">
-                                                    {(() => {
-                                                        const Icon = iconMap[item.icon || 'package'] || iconMap['package']
-                                                        return <Icon className="w-5 h-5" />
-                                                    })()}
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                        {Array.from({ length: 8 }).map((_, i) => (
+                                            <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-4">
+                                                <div className="flex justify-between mb-2">
+                                                    <Skeleton variant="circular" className="w-10 h-10" />
+                                                    <Skeleton className="w-8 h-8 rounded-lg" />
                                                 </div>
-                                                <div className="flex gap-1">
-                                                    <button onClick={() => handleEditStart(item)} className="p-1.5 hover:bg-white/10 rounded-lg text-secondary"><Pencil className="w-3.5 h-3.5" /></button>
+                                                <Skeleton className="h-4 w-3/4 mb-2" />
+                                                <Skeleton className="h-8 w-1/2 mb-2" />
+                                                <div className="border-t border-white/10 pt-2 flex justify-between">
+                                                    <Skeleton className="h-3 w-16" />
+                                                    <Skeleton className="h-3 w-16" />
                                                 </div>
                                             </div>
-                                            <div className="font-semibold mb-1 truncate">{item.name}</div>
-                                            <div className="text-xl font-bold text-white mb-2">
-                                                {item.is_weighted ? `${(item.total_quantity / 1000).toFixed(1)} кг` : `${item.total_quantity} шт`}
+                                        ))}
+                                    </div>
+                                ) : (() => {
+                                    return inventory.filter(item => {
+                                        if (searchQuery && !item.name.toLowerCase().includes(searchQuery.toLowerCase())) return false
+                                        return item.total_quantity > 0
+                                    }).map(item => {
+                                        return (
+                                            <div
+                                                key={item.id}
+                                                className="bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 transition-all group relative cursor-pointer"
+                                                onClick={() => setHistoryItem(item)}
+                                            >
+
+                                                <div className="flex justify-between mb-2">
+                                                    <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center text-primary">
+                                                        {(() => {
+                                                            const Icon = iconMap[item.icon || 'package'] || iconMap['package']
+                                                            return <Icon className="w-5 h-5" />
+                                                        })()}
+                                                    </div>
+                                                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                            <button onClick={(e) => { e.stopPropagation(); handleEditStart(item) }} className="p-1.5 hover:bg-white/10 rounded-lg text-secondary"><Pencil className="w-3.5 h-3.5" /></button>
+                                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteItem(item.id) }} className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div className="font-semibold mb-0.5 truncate">{item.name}</div>
+
+                                                <div className="text-xl font-bold text-white mb-2">
+                                                    {item.is_weighted ? `${(item.total_quantity / 1000).toFixed(1)} кг` : `${item.total_quantity} шт`}
+                                                </div>
+                                                <div className="text-xs text-secondary border-t border-white/10 pt-2 flex justify-between">
+                                                    <span>Стоимость:</span>
+                                                    <span className="text-white">{(item.total_value || 0).toFixed(0)} ₽</span>
+                                                </div>
                                             </div>
-                                            <div className="text-xs text-secondary border-t border-white/10 pt-2 flex justify-between">
-                                                <span>Стоимость:</span>
-                                                <span className="text-white">{(item.total_value || 0).toFixed(0)} ₽</span>
-                                            </div>
-                                        </div>
-                                    ))
-                                )}
+                                        )
+                                    })
+
+                                })()}
                             </div>
                         )}
                     </GlassCard>
@@ -1263,6 +1325,13 @@ export default function Warehouse() {
                     </div>
                 )
             }
+
+            {historyItem && (
+                <ItemHistoryModal
+                    item={historyItem}
+                    onClose={() => setHistoryItem(null)}
+                />
+            )}
 
             {showConfirmModal && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[70]">

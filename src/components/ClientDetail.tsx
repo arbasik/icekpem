@@ -132,15 +132,51 @@ export default function ClientDetail({ client, onClose }: ClientDetailProps) {
         }
     }
 
+    async function updateClientStatus(newStatus: string) {
+        if (!confirm('Изменить статус клиента?')) return
+        try {
+            await supabase.from('locations').update({ status: newStatus }).eq('id', client.id)
+            onClose() // Close to refresh parent
+        } catch (e) {
+            console.error(e)
+            alert('Ошибка обновления статуса')
+        }
+    }
+
     return (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
             <GlassCard className="w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
                 {/* Header */}
                 <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/10">
                     <div>
-                        <h2 className="text-2xl font-bold">{client.name}</h2>
+                        <div className="flex items-center gap-3">
+                            <h2 className="text-2xl font-bold">{client.name}</h2>
+                            {client.status === 'lead' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-gray-500/20 text-gray-400 border border-gray-500/30">ЛИД</span>}
+                            {client.status === 'contacted' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">КОНТАКТ</span>}
+                            {client.status === 'active' && <span className="px-2 py-0.5 rounded text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">АКТИВЕН</span>}
+                        </div>
                         {client.address && <p className="text-sm text-secondary mt-1">📍 {client.address}</p>}
                         {client.contact && <p className="text-sm text-secondary">📞 {client.contact}</p>}
+
+                        {/* Quick Actions */}
+                        <div className="flex gap-2 mt-3">
+                            {client.status === 'lead' && (
+                                <button
+                                    onClick={() => updateClientStatus('contacted')}
+                                    className="px-3 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 text-yellow-400 text-xs font-bold rounded-lg transition-colors border border-yellow-500/30"
+                                >
+                                    Отметить контакт
+                                </button>
+                            )}
+                            {(client.status === 'lead' || client.status === 'contacted') && (
+                                <button
+                                    onClick={() => updateClientStatus('active')}
+                                    className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-xs font-bold rounded-lg transition-colors border border-emerald-500/30"
+                                >
+                                    Активировать
+                                </button>
+                            )}
+                        </div>
                     </div>
                     <button
                         onClick={onClose}

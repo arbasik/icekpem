@@ -15,6 +15,10 @@ export interface Item {
     weight_per_pack?: number // Вес одной упаковки в граммах (для автозаполнения)
     icon?: string
     sale_price?: number // Рекомендуемая цена продажи
+    batch_time_minutes?: number // Время производства одной партии в минутах
+    max_batch_size?: number // Максимальный размер партии
+    notes?: string // Заметки/инструкции для оператора
+
 }
 
 export interface Inventory {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { BookOpen, Plus, Trash2, X, ArrowRight, Pencil, Check } from 'lucide-react'
+import { BookOpen, Plus, Trash2, X, Pencil, Check, FileText } from 'lucide-react'
 import GlassCard from '../components/GlassCard'
 import CustomSelect from '../components/CustomSelect'
 import IconPicker, { iconMap } from '../components/IconPicker'
@@ -8,7 +8,7 @@ import clsx from 'clsx'
 
 interface RecipeWithNames extends Recipe {
     ingredient_name?: string
-    unit_cost?: number
+    is_weighted?: boolean
 }
 
 export default function Recipes() {
@@ -22,8 +22,8 @@ export default function Recipes() {
     const [newQuantity, setNewQuantity] = useState('')
     const [showCreateModal, setShowCreateModal] = useState(false)
     const [isEditing, setIsEditing] = useState(false)
-    const [recipeCost, setRecipeCost] = useState(0)
     const [initialReturnsToRaw, setInitialReturnsToRaw] = useState(false)
+
 
     useEffect(() => { loadData() }, [])
     useEffect(() => {
@@ -51,7 +51,7 @@ export default function Recipes() {
                 .from('recipes')
                 .select(`
                     *,
-                    item:items!recipes_ingredient_id_fkey(name, unit_cost)
+                    item:items!recipes_ingredient_id_fkey(name, is_weighted)
                 `)
                 .eq('finished_good_id', productId)
 
@@ -60,14 +60,10 @@ export default function Recipes() {
             const formatted = data?.map(r => ({
                 ...r,
                 ingredient_name: (r.item as any)?.name,
-                unit_cost: Number((r.item as any)?.unit_cost) || 0
+                is_weighted: (r.item as any)?.is_weighted
             })) || []
 
             setRecipes(formatted)
-
-            // Calculate theoretical cost
-            const total = formatted.reduce((sum, r) => sum + (Number(r.quantity || 0) * (Number(r.unit_cost) || 0)), 0)
-            setRecipeCost(isNaN(total) ? 0 : total)
         } catch (err) {
             console.error('Error loading recipes:', err)
         }
@@ -79,7 +75,6 @@ export default function Recipes() {
             finished_good_id: selectedProduct,
             ingredient_id: newIngredient,
             quantity: parseFloat(newQuantity),
-            // Inherit the returns_to_raw setting from existing items, or use the initial choice
             returns_to_raw: recipes.length > 0 ? recipes[0].returns_to_raw : initialReturnsToRaw
         })
         setNewIngredient(null)
@@ -119,26 +114,20 @@ export default function Recipes() {
                 setFinishedGoods(prev => [...prev, data])
             }
             setSelectedProduct(data.id)
-            setInitialReturnsToRaw(newItemReturnsToRaw) // Save user choice for the new recipe
+            setInitialReturnsToRaw(newItemReturnsToRaw)
         }
 
         setShowCreateModal(false)
         setNewItemName('')
-        setIsEditing(true) // Сразу переходим к редактированию состава
+        setIsEditing(true)
     }
-
-
 
     async function handleUpdateReturnsToRaw(isReturnsToRaw: boolean) {
         if (!selectedProduct) return
 
-        if (!selectedProduct) return
-
-        // Update local state for immediate feedback
         setRecipes(prev => prev.map(r => ({ ...r, returns_to_raw: isReturnsToRaw })))
-        setInitialReturnsToRaw(isReturnsToRaw) // Update fallback as well
+        setInitialReturnsToRaw(isReturnsToRaw)
 
-        // Update all recipe items for this product
         await supabase
             .from('recipes')
             .update({ returns_to_raw: isReturnsToRaw })
@@ -151,9 +140,7 @@ export default function Recipes() {
         if (!confirmDelete) return
 
         try {
-            // Удаляем рецепты (ингредиенты)
             await supabase.from('recipes').delete().eq('finished_good_id', selectedProduct)
-            // Удаляем сам товар
             await supabase.from('items').delete().eq('id', selectedProduct)
 
             loadData()
@@ -163,6 +150,15 @@ export default function Recipes() {
             console.error('Ошибка удаления:', err)
             alert('Ошибка удаления')
         }
+    }
+
+    // Get current product
+    const currentProduct = [...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct)
+
+    // Save notes
+    async function handleSaveNotes(notes: string) {
+        if (!selectedProduct) return
+        await supabase.from('items').update({ notes }).eq('id', selectedProduct)
     }
 
     return (
@@ -186,10 +182,8 @@ export default function Recipes() {
                         </button>
                     </div>
                     <div className="space-y-2">
-                        {/* Показываем только товары, у которых ЕСТЬ рецепты */}
                         {finishedGoods
                             .filter(item => {
-                                // Проверяем, есть ли у товара рецепты
                                 return allRecipes.some(r => r.finished_good_id === item.id) || selectedProduct === item.id
                             })
                             .map(item => (
@@ -199,7 +193,6 @@ export default function Recipes() {
                                 </button>
                             ))
                         }
-                        {/* Показываем сырьё с рецептами */}
                         {rawMaterials
                             .filter(item => {
                                 return allRecipes.some(r => r.finished_good_id === item.id) || selectedProduct === item.id
@@ -216,13 +209,7 @@ export default function Recipes() {
                 <GlassCard className="lg:col-span-2">
                     <div className="flex items-center justify-between mb-4">
                         <div>
-                            <h2 className="text-xl font-semibold">Состав: {[...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct)?.name || '—'}</h2>
-                            {selectedProduct && recipes.length > 0 && ![...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct && p.type === 'raw_material') && (
-                                <p className="text-sm text-secondary mt-1">
-                                    Теоретическая себестоимость: <span className="text-primary font-bold">{recipeCost.toFixed(2)} ₽</span>
-                                </p>
-                            )}
-
+                            <h2 className="text-xl font-semibold">Рецепт: {currentProduct?.name || '—'}</h2>
                         </div>
                         {selectedProduct && (
                             <button onClick={handleDeleteProduct} className="p-2 hover:bg-red-500/20 text-red-400 rounded-lg transition-smooth" title="Удалить продукт">
@@ -230,76 +217,112 @@ export default function Recipes() {
                             </button>
                         )}
                     </div>
-                    {/* Editable Sales Price for Finished Goods */}
-                    {selectedProduct && ![...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct && p.type === 'raw_material') && (
-                        <div className="mb-4 flex items-center gap-2">
-                            <span className="text-sm text-secondary">Цена продажи:</span>
-                            <input
-                                type="number"
-                                className="bg-transparent border-b border-white/20 text-green-400 font-bold w-24 focus:outline-none focus:border-primary text-right"
-                                placeholder="0.00"
-                                onBlur={async (e) => {
-                                    const val = parseFloat(e.target.value);
-                                    if (isNaN(val)) return;
-                                    await supabase.from('items').update({ sale_price: val }).eq('id', selectedProduct);
-                                    loadData(); // Reload to refresh data
-                                }}
-                                defaultValue={[...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct)?.sale_price || ''}
-                                key={selectedProduct} // Re-render on product change
-                            />
-                            <span className="text-sm text-secondary">₽</span>
-                        </div>
-                    )}
 
                     {!isEditing ? (
                         // Визуальный режим
-                        <div className="flex flex-col items-center justify-center py-10 space-y-8 animate-in fade-in duration-300">
-                            <div className="flex items-center gap-4 lg:gap-12 overflow-x-auto p-4 w-full justify-center">
-                                {/* Ingredients Column */}
-                                <div className="flex flex-col gap-4">
-                                    {recipes.length > 0 ? recipes.map(r => (
-                                        <div key={r.ingredient_id} className="p-4 bg-white/5 rounded-xl border border-white/10 min-w-[160px] text-center shadow-lg relative group transition-smooth hover:bg-white/10">
-                                            <div className="absolute right-0 top-1/2 -mr-6 w-6 h-[2px] bg-white/10 lg:hidden block"></div> {/* Mobile connector? */}
-                                            <div className="font-bold text-white">{r.ingredient_name}</div>
-                                            <div className="text-sm text-secondary mt-1">{r.quantity} ед.</div>
-                                        </div>
-                                    )) : (
-                                        <div className="p-4 bg-white/5 rounded-xl border border-white/10 min-w-[160px] text-center text-secondary border-dashed">
-                                            Нет ингредиентов
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Arrow */}
-                                <div className="flex flex-col items-center justify-center text-secondary">
-                                    <ArrowRight className="w-8 h-8 lg:w-12 lg:h-12 text-primary/50" />
-                                </div>
-
-                                {/* Product Column */}
-                                <div className="p-6 bg-primary/20 rounded-xl border border-primary/50 min-w-[160px] text-center shadow-xl shadow-primary/10 transform scale-105 flex flex-col items-center">
-                                    <div className="w-12 h-12 bg-black/20 rounded-lg flex items-center justify-center mb-2 text-white">
-                                        {(() => {
-                                            const item = [...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct)
-                                            if (!item) return <div className="w-6 h-6 bg-gray-500 rounded-full" />
-
-                                            // Safer icon resolution
-                                            const iconName = item.icon || 'package'
-                                            const IconComponent = (iconMap && iconMap[iconName]) ? iconMap[iconName] : (iconMap?.['package'] || null)
-
-                                            if (!IconComponent) return <div className="w-6 h-6 bg-gray-500 rounded-full" />
-                                            return <IconComponent className="w-6 h-6" />
-                                        })()}
+                        <div className="animate-in fade-in duration-300 space-y-6">
+                            {/* Recipe Visualization */}
+                            <div className="flex items-center gap-4 justify-center py-6">
+                                {/* Ingredients */}
+                                <div className="flex-1 max-w-[200px]">
+                                    <div className="text-xs text-secondary mb-2 text-center uppercase tracking-wide">Сырьё</div>
+                                    <div className="bg-gradient-to-br from-red-500/10 to-orange-500/10 rounded-xl border border-red-500/20 p-4 space-y-2 min-h-[100px] flex flex-col justify-center">
+                                        {recipes.length > 0 ? recipes.map(r => (
+                                            <div key={r.ingredient_id} className="flex items-center justify-between text-sm">
+                                                <span className="text-white">{r.ingredient_name}</span>
+                                                <span className="text-red-300 font-medium">{r.quantity} {r.is_weighted ? 'г' : 'шт'}</span>
+                                            </div>
+                                        )) : (
+                                            <div className="text-center text-secondary text-sm">Нет ингредиентов</div>
+                                        )}
                                     </div>
-                                    <div className="font-bold text-lg text-white">
-                                        {[...finishedGoods, ...rawMaterials].find(p => p.id === selectedProduct)?.name || 'Неизвестно'}
-                                    </div>
-                                    <div className="text-sm text-primary mt-1">1 ед.</div>
                                 </div>
+
+                                {/* Process Arrow with Animation */}
+                                <div className="flex flex-col items-center justify-center px-2 self-center">
+                                    {/* Unified animated arrow */}
+                                    <div
+                                        className="w-16 h-4 relative"
+                                        style={{
+                                            clipPath: 'polygon(0% 35%, 75% 35%, 75% 0%, 100% 50%, 75% 100%, 75% 65%, 0% 65%)'
+                                        }}
+                                    >
+                                        <div
+                                            className="absolute inset-0"
+                                            style={{
+                                                background: 'linear-gradient(90deg, #a855f7, #22d3ee, #a855f7)',
+                                                backgroundSize: '200% 100%',
+                                                animation: 'flowGradient 1.5s linear infinite'
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Result */}
+                                <div className="flex-1 max-w-[200px]">
+                                    <div className="text-xs text-secondary mb-2 text-center uppercase tracking-wide">Результат</div>
+                                    <div className="bg-gradient-to-br from-purple-500/20 to-cyan-500/20 rounded-xl border border-purple-500/30 p-4 text-center shadow-lg shadow-purple-500/10 min-h-[100px] flex flex-col justify-center">
+                                        <div className="w-14 h-14 mx-auto bg-black/30 rounded-xl flex items-center justify-center mb-3 text-white">
+                                            {(() => {
+                                                if (!currentProduct) return <div className="w-6 h-6 bg-gray-500 rounded-full" />
+                                                const iconName = currentProduct.icon || 'package'
+                                                const IconComponent = (iconMap && iconMap[iconName]) ? iconMap[iconName] : (iconMap?.['package'] || null)
+                                                if (!IconComponent) return <div className="w-6 h-6 bg-gray-500 rounded-full" />
+                                                return <IconComponent className="w-7 h-7" />
+                                            })()}
+                                        </div>
+                                        <div className="font-bold text-white text-lg">{currentProduct?.name || 'Неизвестно'}</div>
+                                        <div className="text-sm text-purple-300 mt-1">1 ед.</div>
+                                        {(currentProduct?.sale_price ?? 0) > 0 && (
+                                            <div className="text-sm text-cyan-400 mt-2 font-medium">{currentProduct?.sale_price} ₽</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Sale Price Edit */}
+                            {selectedProduct && currentProduct?.type !== 'raw_material' && (
+                                <div className="flex items-center gap-2 justify-center">
+                                    <span className="text-sm text-secondary">Цена продажи:</span>
+                                    <input
+                                        type="number"
+                                        className="bg-transparent border-b border-white/20 text-green-400 font-bold w-24 focus:outline-none focus:border-primary text-center"
+                                        placeholder="0"
+                                        onBlur={async (e) => {
+                                            const val = parseFloat(e.target.value);
+                                            if (isNaN(val)) return;
+                                            await supabase.from('items').update({ sale_price: val }).eq('id', selectedProduct);
+                                            loadData();
+                                        }}
+                                        defaultValue={currentProduct?.sale_price || ''}
+                                        key={`price-${selectedProduct}`}
+                                    />
+                                    <span className="text-sm text-secondary">₽</span>
+                                </div>
+                            )}
+
+                            {/* Editable Notes - always visible */}
+                            <div className="bg-white/5 rounded-lg p-4 border border-white/10">
+                                <div className="flex items-center gap-2 text-secondary text-sm mb-2">
+                                    <FileText className="w-4 h-4" />
+                                    Заметки к рецепту
+                                </div>
+                                <textarea
+                                    key={`notes-${selectedProduct}`}
+                                    defaultValue={currentProduct?.notes || ''}
+                                    onBlur={async (e) => {
+                                        if (!selectedProduct) return
+                                        await supabase.from('items').update({ notes: e.target.value }).eq('id', selectedProduct)
+                                        loadData()
+                                    }}
+                                    placeholder="Инструкции, напоминания, комментарии..."
+                                    className="w-full bg-transparent text-white text-sm resize-none h-20 focus:outline-none placeholder:text-white/30"
+                                />
                             </div>
 
                             <button
                                 onClick={() => setIsEditing(true)}
-                                className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-smooth text-secondary hover:text-white"
+                                className="flex items-center justify-center gap-2 w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-smooth text-secondary hover:text-white"
                             >
                                 <Pencil className="w-4 h-4" />
                                 Редактировать рецепт
@@ -307,114 +330,149 @@ export default function Recipes() {
                         </div>
                     ) : (
                         // Режим редактирования
-                        <div className="animate-in fade-in duration-300">
-                            {/* Настройки типа продукта */}
-                            <div className="mb-6 bg-white/5 p-4 rounded-lg border border-white/10">
-                                <label className="block text-sm font-medium mb-3 text-secondary">Тип продукта (как учитывается на складе)</label>
+                        <div className="animate-in fade-in duration-300 space-y-6">
+                            {/* Product Type */}
+                            <div className="bg-white/5 p-4 rounded-lg border border-white/10">
+                                <label className="block text-sm font-medium mb-3 text-secondary">Тип продукта</label>
                                 <div className="grid grid-cols-2 gap-3">
                                     <button
                                         type="button"
-                                        onClick={() => handleUpdateReturnsToRaw(false)} // Set to FALSE (Finished Good)
+                                        onClick={() => handleUpdateReturnsToRaw(false)}
                                         className={clsx(
-                                            'p-3 rounded-lg border transition-smooth text-left relative overflow-hidden',
+                                            'p-3 rounded-lg border transition-smooth text-left relative',
                                             recipes.length > 0 ? !recipes[0].returns_to_raw : !initialReturnsToRaw
-                                                ? 'bg-primary/20 border-primary shadow-[0_0_15px_-3px_rgba(34,211,238,0.3)]'
-                                                : 'bg-white/5 border-white/10 hover:bg-white/10 opacity-60 hover:opacity-100'
+                                                ? 'bg-primary/20 border-primary'
+                                                : 'bg-white/5 border-white/10 hover:bg-white/10'
                                         )}
                                     >
-                                        {/* Marker for active state */}
                                         {(recipes.length > 0 ? !recipes[0].returns_to_raw : !initialReturnsToRaw) && (
-                                            <div className="absolute top-2 right-2 text-primary">
-                                                <Check className="w-4 h-4" />
-                                            </div>
+                                            <div className="absolute top-2 right-2 text-primary"><Check className="w-4 h-4" /></div>
                                         )}
-                                        <div className={clsx("font-bold text-sm", (recipes.length > 0 ? !recipes[0].returns_to_raw : !initialReturnsToRaw) ? "text-white" : "text-secondary")}>Готовая продукция</div>
-                                        <p className="text-xs text-secondary mt-1">Продается клиентам (шт)</p>
+                                        <div className="font-bold text-sm text-white">Готовая продукция</div>
+                                        <p className="text-xs text-secondary mt-1">Продается клиентам</p>
                                     </button>
                                     <button
                                         type="button"
-                                        onClick={() => handleUpdateReturnsToRaw(true)} // Set to TRUE (Raw from Raw)
+                                        onClick={() => handleUpdateReturnsToRaw(true)}
                                         className={clsx(
-                                            'p-3 rounded-lg border transition-smooth text-left relative overflow-hidden',
+                                            'p-3 rounded-lg border transition-smooth text-left relative',
                                             recipes.length > 0 ? recipes[0].returns_to_raw : initialReturnsToRaw
-                                                ? 'bg-primary/20 border-primary shadow-[0_0_15px_-3px_rgba(34,211,238,0.3)]'
-                                                : 'bg-white/5 border-white/10 hover:bg-white/10 opacity-60 hover:opacity-100'
+                                                ? 'bg-primary/20 border-primary'
+                                                : 'bg-white/5 border-white/10 hover:bg-white/10'
                                         )}
                                     >
                                         {(recipes.length > 0 ? recipes[0].returns_to_raw : initialReturnsToRaw) && (
-                                            <div className="absolute top-2 right-2 text-primary">
-                                                <Check className="w-4 h-4" />
-                                            </div>
+                                            <div className="absolute top-2 right-2 text-primary"><Check className="w-4 h-4" /></div>
                                         )}
-                                        <div className={clsx("font-bold text-sm", (recipes.length > 0 ? recipes[0].returns_to_raw : initialReturnsToRaw) ? "text-white" : "text-secondary")}>Полуфабрикат</div>
-                                        <p className="text-xs text-secondary mt-1">Используется в других рецептах (г)</p>
+                                        <div className="font-bold text-sm text-white">Полуфабрикат</div>
+                                        <p className="text-xs text-secondary mt-1">Используется в других рецептах</p>
                                     </button>
                                 </div>
                             </div>
 
-                            <h3 className="font-semibold mb-3 px-1">Список ингредиентов</h3>
-                            <div className="space-y-3 mb-6">
-                                {recipes.length === 0 ? <div className="text-center py-8 text-secondary border border-dashed border-white/10 rounded-lg">Список пуст. Добавьте ингредиенты ниже.</div> : recipes.map(r => (
-                                    <div key={r.ingredient_id} className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10">
-                                        <div className="flex-1">
-                                            <div className="font-medium">{r.ingredient_name}</div>
-                                            <div className="text-sm text-secondary flex gap-4 mt-1">
-                                                <span>Количество: {r.quantity}</span>
-                                                <span className="text-white/50">
-                                                    ({((Number(r.quantity) || 0) * (Number(r.unit_cost) || 0)).toFixed(2)} ₽)
-                                                </span>
-                                            </div>
+                            {/* Ingredients List */}
+                            <div>
+                                <h3 className="font-semibold mb-3">Список ингредиентов</h3>
+                                <div className="space-y-2 mb-4">
+                                    {recipes.length === 0 ? (
+                                        <div className="text-center py-8 text-secondary border border-dashed border-white/10 rounded-lg">
+                                            Список пуст. Добавьте ингредиенты ниже.
                                         </div>
-                                        <button onClick={() => handleDeleteIngredient(r.ingredient_id)} className="w-8 h-8 flex items-center justify-center hover:bg-red-500/20 rounded-lg transition-smooth text-red-400"><Trash2 className="w-4 h-4" /></button>
-                                    </div>
-                                ))}
+                                    ) : recipes.map(r => (
+                                        <div key={r.ingredient_id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/10">
+                                            <div>
+                                                <div className="font-medium text-white">{r.ingredient_name}</div>
+                                                <div className="text-sm text-secondary">Количество: {r.quantity}</div>
+                                            </div>
+                                            <button onClick={() => handleDeleteIngredient(r.ingredient_id)} className="w-8 h-8 flex items-center justify-center hover:bg-red-500/20 rounded-lg transition-smooth text-red-400">
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
                             </div>
 
+                            {/* Add Ingredient */}
                             {selectedProduct && (
                                 <div className="border-t border-white/10 pt-6">
                                     <h3 className="font-semibold mb-4">Добавить ингредиент</h3>
-
                                     <div className="grid grid-cols-2 gap-4">
                                         <div>
-                                            <label className="block text-sm font-medium mb-2">Выберите ингредиент</label>
-                                            <div className="flex gap-2">
-                                                <CustomSelect
-                                                    value={newIngredient}
-                                                    onChange={(val) => setNewIngredient(val)}
-                                                    options={[...rawMaterials, ...finishedGoods]
-                                                        .filter(item => {
-                                                            // Исключаем сам продукт (чтобы не добавить себя в себя)
-                                                            if (item.id === selectedProduct) return false
-                                                            // Исключаем уже добавленные ингредиенты
-                                                            if (recipes.find(r => r.ingredient_id === item.id)) return false
-                                                            return true
-                                                        })
-                                                        .map(i => ({
-                                                            value: i.id,
-                                                            label: `${i.name} ${i.type === 'finished_good' ? '(Прод.)' : ''}`
-                                                        }))
-                                                    }
-                                                    placeholder="Поиск ингредиента..."
-                                                    className="flex-1"
-                                                />
-                                            </div>
+                                            <label className="block text-sm font-medium mb-2">Ингредиент</label>
+                                            <CustomSelect
+                                                value={newIngredient}
+                                                onChange={(val) => setNewIngredient(val)}
+                                                options={[...rawMaterials, ...finishedGoods]
+                                                    .filter(item => {
+                                                        if (item.id === selectedProduct) return false
+                                                        if (recipes.find(r => r.ingredient_id === item.id)) return false
+                                                        return true
+                                                    })
+                                                    .map(i => ({
+                                                        value: i.id,
+                                                        label: `${i.name} ${i.type === 'finished_good' ? '(Прод.)' : ''}`
+                                                    }))
+                                                }
+                                                placeholder="Выберите..."
+                                            />
                                         </div>
-                                        <div><label className="block text-sm font-medium mb-2">Количество</label><input type="number" value={newQuantity} onChange={e => setNewQuantity(e.target.value)} className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-primary" placeholder="0" step="0.01" /></div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-2">Количество</label>
+                                            <input
+                                                type="number"
+                                                value={newQuantity}
+                                                onChange={e => setNewQuantity(e.target.value)}
+                                                className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-primary"
+                                                placeholder="0"
+                                                step="0.01"
+                                            />
+                                        </div>
                                     </div>
-
-                                    <div className="flex gap-4 mt-6">
-                                        <button onClick={() => setIsEditing(false)} className="flex-1 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg font-medium text-secondary hover:text-white transition-smooth">
-                                            Готово
+                                    <div className="flex gap-4 mt-4">
+                                        <button
+                                            onClick={handleAddIngredient}
+                                            disabled={!newIngredient || !newQuantity}
+                                            className={clsx(
+                                                'flex-1 flex items-center justify-center gap-2 py-3 rounded-lg font-medium',
+                                                !newIngredient || !newQuantity
+                                                    ? 'bg-white/10 text-secondary cursor-not-allowed'
+                                                    : 'bg-primary hover:bg-primary/90 text-white'
+                                            )}
+                                        >
+                                            <Plus className="w-5 h-5" />
+                                            Добавить
                                         </button>
-                                        <button onClick={handleAddIngredient} disabled={!newIngredient || !newQuantity} className={clsx('flex-1 flex items-center justify-center gap-2 py-3 rounded-lg font-medium', !newIngredient || !newQuantity ? 'bg-white/10 text-secondary cursor-not-allowed' : 'bg-primary hover:bg-primary/90 text-white')}><Plus className="w-5 h-5" />Добавить</button>
                                     </div>
                                 </div>
                             )}
+
+                            {/* Notes */}
+                            <div>
+                                <h3 className="font-semibold mb-3 flex items-center gap-2">
+                                    <FileText className="w-4 h-4 text-cyan-400" />
+                                    Заметки
+                                </h3>
+                                <textarea
+                                    defaultValue={currentProduct?.notes || ''}
+                                    onBlur={e => handleSaveNotes(e.target.value)}
+                                    placeholder="Инструкции, памятка для оператора..."
+                                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-primary resize-none h-24"
+                                />
+                            </div>
+
+                            {/* Done Button */}
+                            <button
+                                onClick={() => setIsEditing(false)}
+                                className="w-full py-3 bg-primary hover:bg-primary/90 text-white rounded-lg font-medium"
+                            >
+                                Готово
+                            </button>
                         </div>
                     )}
                 </GlassCard>
-            </div >
+            </div>
 
+            {/* Create Modal */}
             {showCreateModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[10000]">
                     <GlassCard className="w-full max-w-sm">
@@ -441,12 +499,7 @@ export default function Recipes() {
                                     autoFocus
                                 />
                             </div>
-                            {/* Sales price message */}
-                            <div className="text-sm text-secondary p-2 bg-white/5 rounded-lg border border-white/10">
-                                <p>Тип продукта: {newItemReturnsToRaw ? 'Полуфабрикат (сырьё)' : 'Готовая продукция'}</p>
-                            </div>
 
-                            {/* Product Type Toggle */}
                             <div className="grid grid-cols-2 gap-3">
                                 <button
                                     onClick={() => setNewItemReturnsToRaw(false)}
@@ -459,7 +512,7 @@ export default function Recipes() {
                                     onClick={() => setNewItemReturnsToRaw(true)}
                                     className={clsx("p-3 rounded-lg border text-left transition-all", newItemReturnsToRaw ? "bg-primary/20 border-primary" : "bg-white/5 border-white/10 hover:bg-white/10")}
                                 >
-                                    <div className="font-medium text-sm">Внутренний рецепт</div>
+                                    <div className="font-medium text-sm">Полуфабрикат</div>
                                     <div className="text-xs text-secondary mt-1">Сырьё из сырья</div>
                                 </button>
                             </div>
@@ -484,11 +537,17 @@ export default function Recipes() {
                                 Создать
                             </button>
                         </div>
-                    </GlassCard >
-                </div >
-            )
-            }
-        </div >
+                    </GlassCard>
+                </div>
+            )}
+
+            {/* CSS for animation */}
+            <style>{`
+                @keyframes flowGradient {
+                    0% { background-position: 200% 0; }
+                    100% { background-position: -200% 0; }
+                }
+            `}</style>
+        </div>
     )
 }
-

@@ -1,0 +1,39 @@
+appId: com.ice.erp
+productName: Ice ERP
+copyright: Copyright © 2024
+
+directories:
+  buildResources: public
+  output: release
+
+files:
+  - dist/**/*
+  - electron/**/*.js
+  - electron/**/*.js.map
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/ice-icon.png
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Ice ERP
+
+publish:
+  provider: github
+  owner: arbasik
+  repo: icekpem
+  releaseType: release
+
+# Auto-update - will check GitHub releases
+autoUpdate:
+  checkOnStartup: true

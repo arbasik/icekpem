@@ -246,6 +246,30 @@ export default function ProductionOperations() {
                 const { data: current } = await supabase.from('production_queue').select('status').eq('id', prod.id).single()
                 if (current?.status !== 'in_progress') continue
 
+                // TRIPLE check: Ensure no inventory move exists for this batch_id and item_id (Output)
+                // This prevents race conditions where logic runs twice but status update lags
+                if ((prod as any).batch_id) {
+                    const { data: existingMove } = await supabase
+                        .from('inventory_moves')
+                        .select('id')
+                        .eq('batch_id', (prod as any).batch_id)
+                        .eq('item_id', prod.finished_good_id)
+                        .eq('type', 'production')
+                        .gt('quantity', 0) // Look for output (positive quantity)
+                        .limit(1)
+                        .maybeSingle()
+
+                    if (existingMove) {
+                        console.warn(`Duplicate production detected for batch ${(prod as any).batch_id}. Marking as completed without re-crediting.`)
+                        // Just mark as completed and skip crediting
+                        await supabase
+                            .from('production_queue')
+                            .update({ status: 'completed' })
+                            .eq('id', prod.id)
+                        continue
+                    }
+                }
+
                 // Получаем информацию о рецепте
                 const { data: recipe } = await supabase
                     .from('recipes')
@@ -311,14 +335,15 @@ export default function ProductionOperations() {
                     }).eq('id', prod.finished_good_id)
                 }
 
-                // Добавляем продукцию на склад
+                // Добавляем продукцию на склад (с batch_id для группировки)
                 await supabase.from('inventory_moves').insert({
                     item_id: prod.finished_good_id,
                     from_location_id: null,
                     to_location_id: locationId,
                     quantity: finalQuantity,
                     type: 'production',
-                    unit_price: unitPrice
+                    unit_price: unitPrice,
+                    batch_id: (prod as any).batch_id || null
                 })
 
                 // Update the item's unit_cost
@@ -425,7 +450,8 @@ export default function ProductionOperations() {
                     to_location_id: locations.id,
                     quantity: outputWeight,
                     type: 'production',
-                    unit_price: outputWeight > 0 ? (estimatedCost / outputWeight) : 0
+                    unit_price: outputWeight > 0 ? (estimatedCost / outputWeight) : 0,
+                    batch_id: (queueItem as any).batch_id || null
                 })
 
                 if (moveError) {
@@ -680,19 +706,24 @@ export default function ProductionOperations() {
                 throw new Error('Критическая ошибка: Не указана локация склада (locationId is null)')
             }
 
-            // 1. Списываем сырье
+            // Generate unique batch_id for this production run
+            const batchId = `prod_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+            // 1. Списываем сырье (с отрицательным quantity для группировки)
             for (const item of items) {
                 console.log(`[Production] Списание: ${(item.ingredient as any)?.name}, Qty: ${item.requiredQty}г, Location: ${locationId}`)
 
                 // Для списания: from_location_id = склад, to_location_id = null
                 // Триггер при from_location_id != null делает: inventory.quantity - NEW.quantity
+                // ВАЖНО: Сохраняем положительное количество - триггер вычтет из инвентаря
                 const { error: moveError } = await supabase.from('inventory_moves').insert({
                     item_id: item.ingredient_id,
                     from_location_id: locationId,
                     to_location_id: null,
                     quantity: item.requiredQty, // Положительное - триггер вычтет
                     type: 'production',
-                    unit_price: 0
+                    unit_price: (item.freshIng?.unit_cost || 0),
+                    batch_id: batchId
                 })
 
                 if (moveError) {
@@ -708,7 +739,7 @@ export default function ProductionOperations() {
 
             // ... (Value Deduction Logic) ...
 
-            const { error: queueError } = await supabase
+            const { data: queueData, error: queueError } = await supabase
                 .from('production_queue')
                 .insert({
                     finished_good_id: selectedProduct,
@@ -717,7 +748,8 @@ export default function ProductionOperations() {
                     completes_at: completesAt.toISOString(),
                     location_id: locationId,
                     status: 'in_progress',
-                    estimated_cost: totalCost
+                    estimated_cost: totalCost,
+                    batch_id: batchId
                 })
                 .select()
                 .single()
@@ -858,15 +890,23 @@ export default function ProductionOperations() {
                                 <label className="block text-sm font-medium mb-2">
                                     {recipeInfo?.returns_to_raw ? 'Вес сырья для переработки (г)' : 'Количество для производства (шт)'}
                                 </label>
-                                <input
-                                    type="number"
-                                    value={quantity}
-                                    onChange={(e) => setQuantity(e.target.value)}
-                                    max={recipeInfo?.returns_to_raw ? totalAvailableWeight : maxQuantity}
-                                    min={1}
-                                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-primary transition-smooth"
-                                    placeholder={recipeInfo?.returns_to_raw ? "Введите вес в граммах" : "Введите количество"}
-                                />
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        value={quantity}
+                                        onChange={(e) => setQuantity(e.target.value)}
+                                        max={recipeInfo?.returns_to_raw ? totalAvailableWeight : maxQuantity}
+                                        min={1}
+                                        className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white focus:outline-none focus:border-primary transition-smooth pr-20"
+                                        placeholder={recipeInfo?.returns_to_raw ? "Введите вес в граммах" : "Введите количество"}
+                                    />
+                                    <button
+                                        onClick={() => setQuantity((recipeInfo?.returns_to_raw ? totalAvailableWeight : maxQuantity).toString())}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-primary/20 hover:bg-primary/30 text-primary text-xs font-bold rounded-md transition-colors"
+                                    >
+                                        МАКС
+                                    </button>
+                                </div>
                             </div>
 
                             {recipeInfo?.returns_to_raw && (

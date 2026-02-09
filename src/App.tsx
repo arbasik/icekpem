@@ -11,9 +11,10 @@ import Distribution from './pages/Distribution'
 import Clients from './pages/Clients'
 import Finance from './pages/Finance'
 import Settings from './pages/Settings'
+import { UpdateNotification } from './components/UpdateNotification'
 import { useEffect } from 'react'
 
-import Diagnostics from './pages/Diagnostics'
+
 
 function App() {
     useEffect(() => {
@@ -25,6 +26,9 @@ function App() {
 
     return (
         <BrowserRouter>
+            {/* Update notification (only shows in Electron when update available) */}
+            <UpdateNotification />
+
             <Routes>
                 <Route path="/" element={<Layout />}>
                     <Route index element={<Navigate to="/dashboard" replace />} />
@@ -39,7 +43,7 @@ function App() {
                     <Route path="clients" element={<Clients />} />
                     <Route path="finance" element={<Finance />} />
                     <Route path="settings" element={<Settings />} />
-                    <Route path="diagnostics" element={<Diagnostics />} />
+
                 </Route>
             </Routes>
         </BrowserRouter>
