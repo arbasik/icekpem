@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Location, supabase } from '../lib/supabase'
+import { Location } from '../lib/supabase'
 import L from 'leaflet'
 
 interface ClientsMapProps {
@@ -8,7 +8,7 @@ interface ClientsMapProps {
     onStatusChange?: () => void
 }
 
-export default function ClientsMap({ clients, onClientClick, onStatusChange }: ClientsMapProps) {
+export default function ClientsMap({ clients, onClientClick }: ClientsMapProps) {
     const mapRef = useRef<HTMLDivElement>(null)
     const mapInstanceRef = useRef<L.Map | null>(null)
     const tileLayerRef = useRef<L.TileLayer | null>(null)
@@ -85,16 +85,6 @@ export default function ClientsMap({ clients, onClientClick, onStatusChange }: C
         }
     }
 
-    // Helper: Update status
-    const updateStatus = async (id: string, newStatus: string) => {
-        try {
-            await supabase.from('locations').update({ status: newStatus }).eq('id', id)
-            if (onStatusChange) onStatusChange()
-        } catch (e) {
-            console.error('Error updating status', e)
-        }
-    }
-
     // Обновление маркеров
     useEffect(() => {
         if (!mapInstanceRef.current) return
@@ -111,7 +101,6 @@ export default function ClientsMap({ clients, onClientClick, onStatusChange }: C
             if (!mapInstanceRef.current) return
 
             const color = getStatusColor(client.status)
-            const isLead = client.status === 'lead'
 
             const customIcon = L.divIcon({
                 className: 'custom-marker',

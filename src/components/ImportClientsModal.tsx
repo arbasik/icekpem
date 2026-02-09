@@ -1,8 +1,8 @@
 
 import { useState } from 'react'
-import { X, Upload, FileText, Check, AlertTriangle, HelpCircle, MapPin, RefreshCw } from 'lucide-react'
+import { X, Upload, Check, AlertTriangle, HelpCircle, MapPin, RefreshCw } from 'lucide-react'
 import GlassCard from './GlassCard'
-import { supabase, Location } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 
 interface ImportClientsModalProps {
     onClose: () => void

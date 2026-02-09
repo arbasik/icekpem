@@ -739,7 +739,7 @@ export default function ProductionOperations() {
 
             // ... (Value Deduction Logic) ...
 
-            const { data: queueData, error: queueError } = await supabase
+            const { error: queueError } = await supabase
                 .from('production_queue')
                 .insert({
                     finished_good_id: selectedProduct,

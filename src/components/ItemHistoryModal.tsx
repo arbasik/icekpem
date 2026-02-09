@@ -1,6 +1,6 @@
 
 import { useState, useEffect } from 'react'
-import { X, Calendar, Package, DollarSign, TrendingUp, Factory } from 'lucide-react'
+import { X, Calendar, Package, TrendingUp, Factory } from 'lucide-react'
 import GlassCard from './GlassCard'
 import { supabase, InventoryMove } from '../lib/supabase'
 import Skeleton from './Skeleton'
