@@ -14,11 +14,11 @@ interface MoveWithDetails extends InventoryMove {
     payment_status?: string
 }
 
-const moveTypeColors = {
-    purchase: 'text-emerald-400',
-    sale: 'text-red-400',
-    transfer: 'text-blue-400',
-    production: 'text-purple-400'
+const moveTypeLabels = {
+    purchase: 'Приход',
+    sale: 'Продажа',
+    transfer: 'Перемещение',
+    production: 'Производство'
 }
 
 const moveTypeIcons = {
