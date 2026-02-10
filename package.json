@@ -2,7 +2,7 @@
   "name": "ice-erp",
   "version": "1.0.0",
   "description": "Ice ERP - Production Management System",
-  "main": "electron/main.js",
+  "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
     "dev": "vite",

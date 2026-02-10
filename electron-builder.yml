@@ -8,8 +8,8 @@ directories:
 
 files:
   - dist/**/*
-  - electron/**/*.js
-  - electron/**/*.js.map
+  - dist-electron/**/*.js
+  - dist-electron/**/*.js.map
   - package.json
 
 win:
